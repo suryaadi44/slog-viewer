@@ -457,7 +457,7 @@ body {
 
 /* Log entry */
 .log-entry {
-    margin-bottom: 4px;
+    margin-bottom: 1px;
     border-left: 3px solid var(--border-color);
     padding-left: 8px;
 }
@@ -499,7 +499,7 @@ body {
     align-items: center;
     gap: 8px;
     cursor: pointer;
-    padding: 4px 0;
+    padding: 2px 0;
     user-select: none;
 }
 

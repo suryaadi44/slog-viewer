@@ -25,7 +25,7 @@ let autoScrollActive = true;
 let activeFilters = [];  // Array of FilterCondition objects
 let availableFields = new Set(['message', 'level']);  // Discovered fields from logs
 let filterIdCounter = 0;  // For generating unique filter IDs
-let contextMenuTarget = null;  // { field, value } for context menu actions
+let contextMenuTarget = null;  // { field, value, fileInfo? } for context menu actions
 
 // Filter operators
 const FILTER_OPERATORS = {
@@ -505,8 +505,9 @@ function createLogElement(log, index) {
     const message = document.createElement('span');
     message.className = 'log-message filterable';
     message.textContent = log.message;
-    // Add click handler for filtering by message
-    message.addEventListener('click', (e) => {
+    // Right-click handler for filtering by message
+    message.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         showContextMenu(e, 'message', log.message || '');
     });
@@ -608,12 +609,14 @@ function createJSONElement(obj, indent = 0) {
         line.className = 'json-line filterable';
         line.style.paddingLeft = `${(indent + 1) * 16}px`;
 
-        // Make the whole line clickable for filtering
+        // Right-click handler for filtering by field value
         const displayValue = value === null ? 'null' :
             typeof value === 'object' ? JSON.stringify(value) : String(value);
-        line.addEventListener('click', (e) => {
+        const fileInfo = parseFilePath(typeof value === 'string' ? value : null);
+        line.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
             e.stopPropagation();
-            showContextMenu(e, key, displayValue);
+            showContextMenu(e, key, displayValue, fileInfo || null);
         });
 
         // Key
@@ -692,7 +695,7 @@ function createValueElement(value) {
         if (fileInfo) {
             span.className = 'json-string json-file-link';
             span.textContent = `"${value}"`;
-            span.title = 'Click to open file (use right-click for filter menu)';
+            span.title = 'Click to open file';
             span.addEventListener('click', (e) => {
                 e.stopPropagation();
                 vscode.postMessage({
@@ -1130,11 +1133,9 @@ function updateNoResultsState() {
 // CONTEXT MENU FUNCTIONS
 // ============================================
 
-// Show context menu on click
-function showContextMenu(e, field, value) {
-    e.stopPropagation();
-
-    contextMenuTarget = { field, value: String(value) };
+// Show context menu on right-click
+function showContextMenu(e, field, value, fileInfo) {
+    contextMenuTarget = { field, value: String(value), fileInfo: fileInfo || null };
 
     const menu = document.getElementById('contextMenu');
     menu.classList.remove('hidden');
@@ -1148,6 +1149,19 @@ function showContextMenu(e, field, value) {
 
     includeItem.innerHTML = `<span class="menu-icon">+</span> Include ${escapeHtml(field)} = "${escapeHtml(truncatedValue)}"`;
     excludeItem.innerHTML = `<span class="menu-icon">-</span> Exclude ${escapeHtml(field)} = "${escapeHtml(truncatedValue)}"`;
+
+    // Show/hide "Open file" menu item based on file info
+    const openFileItem = document.getElementById('contextMenuOpenFile');
+    const fileSeparator = document.getElementById('contextMenuFileSeparator');
+    if (openFileItem && fileSeparator) {
+        if (contextMenuTarget.fileInfo) {
+            openFileItem.classList.remove('hidden');
+            fileSeparator.classList.remove('hidden');
+        } else {
+            openFileItem.classList.add('hidden');
+            fileSeparator.classList.add('hidden');
+        }
+    }
 
     // Position menu near click, but keep on screen
     const menuRect = menu.getBoundingClientRect();
@@ -1201,6 +1215,15 @@ function handleContextMenuAction(action) {
         case 'copy':
             navigator.clipboard.writeText(value);
             break;
+        case 'open_file':
+            if (contextMenuTarget.fileInfo) {
+                vscode.postMessage({
+                    type: 'openFile',
+                    filePath: contextMenuTarget.fileInfo.filePath,
+                    line: contextMenuTarget.fileInfo.line
+                });
+            }
+            break;
     }
 
     hideContextMenu();
@@ -1208,8 +1231,9 @@ function handleContextMenuAction(action) {
 
 // Initialize context menu handlers
 function initContextMenu() {
-    // Hide menu on click outside
+    // Hide menu on click or right-click outside
     document.addEventListener('click', hideContextMenu);
+    document.addEventListener('contextmenu', hideContextMenu);
 
     // Handle Escape key
     document.addEventListener('keydown', (e) => {

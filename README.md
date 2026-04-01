@@ -10,10 +10,10 @@ Beautiful structured log viewer for debugging. Automatically transforms JSON/log
 - **Task Support**: Capture structured logs from VS Code Tasks (`"type": "slogViewer"`)
 - **Open Log Files**: View any structured log file directly in the panel, with optional live tail
 - **Interactive UI**: Modern webview with VSCode theme integration
-- **Advanced Filtering**: Click any field to include/exclude logs by value
+- **Advanced Filtering**: Right-click any field to include/exclude logs by value
 - **Filtering & Search**: Filter by log level and search across messages
 - **Export Logs**: Copy or save filtered logs as JSON, CSV, or text
-- **Collapsible Fields**: Click to expand/collapse JSON
+- **Collapsible Fields**: Click to expand/collapse log details
 - **Works with Any Language**: Go slog, Node.js pino, Python structlog, and more
 
 ## Quick Start
@@ -112,7 +112,7 @@ time=2025-01-01T00:00:00Z level=info msg="Server started" port=8080
 ## Advanced Filtering
 
 
-1. **Click any value** - Click on a log message or any JSON field value to open the filter menu
+1. **Right-click any value** - Right-click on a log message or any JSON field value to open the filter menu
 2. **Include/Exclude** - Choose to show only logs with that value, or hide logs with that value
 3. **Filter chips** - Active filters appear as chips below the toolbar
    - Green chips = include filters
@@ -121,7 +121,7 @@ time=2025-01-01T00:00:00Z level=info msg="Server started" port=8080
    - Click × to remove a filter
 4. **Add Filter button** - Manually create filters for any field
 
-**Example**: To hide all "http request" logs, click on a message containing "http request" and select "Exclude".
+**Example**: To hide all "http request" logs, right-click on a message containing "http request" and select "Exclude".
 
 ## Configuration
 
@@ -130,7 +130,7 @@ Access via VSCode Settings → "Slog Viewer":
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `slogViewer.autoReveal` | `true` | Automatically reveal the panel when the first structured log is detected. Set to `false` to open the panel manually. |
-| `slogViewer.collapseJSON` | `true` | Show JSON collapsed by default (click to expand) |
+| `slogViewer.collapseJSON` | `true` | Show log details collapsed by default (click to expand) |
 | `slogViewer.showRawJSON` | `false` | Show the raw JSON log below each formatted entry |
 | `slogViewer.autoScroll` | `true` | Automatically scroll to the latest log entry |
 | `slogViewer.theme` | `auto` | Theme for the log viewer (`light`, `dark`, or `auto`) |

@@ -2,6 +2,13 @@
 
 All notable changes to the "Slog Viewer" extension will be documented in this file.
 
+## [1.6.0] - 2026-04-01
+
+### Changed
+- **Improved click UX**: Left-click on a log entry now expands/collapses it; right-click opens the filter context menu (include/exclude/copy)
+- **Open file via context menu**: Right-clicking a file path field now shows an "Open file" option alongside filter actions
+- **Compact log spacing**: Reduced vertical spacing between log entries for a denser, more scannable view
+
 ## [1.5.1] - 2026-03-17
 
 ### Fixed
