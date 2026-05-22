@@ -163,6 +163,9 @@ window.addEventListener('message', event => {
         case 'addLog':
             addLogToSession(message.sessionId, message.log);
             break;
+        case 'replaceSessionLogs':
+            replaceSessionLogs(message.sessionId, message.logs);
+            break;
         case 'clearLogs':
             clearCurrentSessionLogs();
             break;
@@ -430,6 +433,36 @@ function addLogToSession(sessionId, log) {
             }
             reindexLogEntries();
         }
+    }
+}
+
+// Replace all logs for a session. Used when a parsing setting (e.g. field
+// aliases) changes and the extension re-parses already-loaded logs.
+function replaceSessionLogs(sessionId, logs) {
+    let session = sessions.get(sessionId);
+    if (!session) {
+        session = {
+            info: { id: sessionId, name: 'Unknown', isActive: true },
+            logs: [],
+            filters: createDefaultFilterState()
+        };
+        sessions.set(sessionId, session);
+    }
+
+    session.logs = logs;
+
+    // Rebuild the set of fields available for filtering from the new logs.
+    const fields = new Set(['message', 'level']);
+    logs.forEach(log => {
+        if (log.otherFields) {
+            Object.keys(log.otherFields).forEach(key => fields.add(key));
+        }
+    });
+    session.filters.availableFields = new Set(fields);
+
+    if (sessionId === currentSessionId) {
+        availableFields = new Set(fields);
+        renderCurrentSessionLogs();
     }
 }
 
