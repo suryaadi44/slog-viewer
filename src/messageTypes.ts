@@ -108,4 +108,5 @@ export interface WebviewConfig {
   showRawJSON: boolean;
   autoScroll: boolean;
   theme: 'light' | 'dark' | 'auto';
+  messageMaxLength: number;
 }

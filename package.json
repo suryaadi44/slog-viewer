@@ -194,6 +194,12 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically reveal the Slog Viewer panel when the first structured log is detected. When disabled, open the panel manually."
+        },
+        "slogViewer.messageMaxLength": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "description": "Maximum characters of a log message shown before truncation. Click \"Show more\" to reveal the full message. Set to 0 to disable truncation."
         }
       }
     }
