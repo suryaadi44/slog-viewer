@@ -277,7 +277,8 @@ export class SlogViewerWebviewProvider implements vscode.WebviewViewProvider {
       collapseJSON: config.get<boolean>('collapseJSON', true),
       showRawJSON: config.get<boolean>('showRawJSON', false),
       autoScroll: config.get<boolean>('autoScroll', true),
-      theme: config.get<'light' | 'dark' | 'auto'>('theme', 'auto')
+      theme: config.get<'light' | 'dark' | 'auto'>('theme', 'auto'),
+      messageMaxLength: config.get<number>('messageMaxLength', 200)
     };
 
     const message: ExtensionMessage = {
