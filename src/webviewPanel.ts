@@ -278,7 +278,8 @@ export class SlogViewerWebviewProvider implements vscode.WebviewViewProvider {
       showRawJSON: config.get<boolean>('showRawJSON', false),
       autoScroll: config.get<boolean>('autoScroll', true),
       theme: config.get<'light' | 'dark' | 'auto'>('theme', 'auto'),
-      messageMaxLength: config.get<number>('messageMaxLength', 200)
+      messageMaxLength: config.get<number>('messageMaxLength', 200),
+      tagFields: config.get<string[]>('tagFields', [])
     };
 
     const message: ExtensionMessage = {

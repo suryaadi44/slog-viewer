@@ -120,4 +120,5 @@ export interface WebviewConfig {
   autoScroll: boolean;
   theme: 'light' | 'dark' | 'auto';
   messageMaxLength: number;
+  tagFields: string[];
 }

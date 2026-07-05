@@ -140,6 +140,7 @@ Access via VSCode Settings → "Slog Viewer":
 | `slogViewer.timeFieldAliases` | `[]` | Extra field names recognized as the timestamp — see below. |
 | `slogViewer.levelFieldAliases` | `[]` | Extra field names recognized as the log level — see below. |
 | `slogViewer.messageFieldAliases` | `[]` | Extra field names recognized as the message — see below. |
+| `slogViewer.tagFields` | `[]` | Field names shown as `name:value` tags right after the log level, e.g. `["service", "component"]`. The field still appears in the expanded JSON. |
 
 ### Field aliases
 
