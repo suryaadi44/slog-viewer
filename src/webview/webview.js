@@ -654,82 +654,121 @@ function createLogElement(log, index) {
     return entry;
 }
 
-// Create JSON element with syntax highlighting
-function createJSONElement(obj, indent = 0) {
-    const container = document.createElement('div');
+// A single indented row in the JSON tree
+function makeJSONLine(depth) {
+    const line = document.createElement('div');
+    line.className = 'json-line';
+    line.style.paddingLeft = `${depth * 16}px`;
+    return line;
+}
 
-    if (Object.keys(obj).length === 0) {
-        const line = document.createElement('div');
-        line.className = 'json-line';
-        line.style.paddingLeft = `${indent * 16}px`;
+// A json-punctuation span (braces, brackets, colons, commas)
+function makePunct(text) {
+    const span = document.createElement('span');
+    span.className = 'json-punctuation';
+    span.textContent = text;
+    return span;
+}
 
-        const punct = document.createElement('span');
-        punct.className = 'json-punctuation';
-        punct.textContent = '{}';
-        line.appendChild(punct);
+// Attach the filter context menu to a top-level field's first line.
+function applyFieldContext(line, ctx) {
+    line.classList.add('filterable');
+    attachContextMenuHandler(line, ctx.key, ctx.displayValue, ctx.fileInfo);
+}
 
+// Render a JSON value as one or more indented .json-line rows appended to `container`.
+// Objects/arrays recurse into an inline tree instead of being stringified.
+// - prefixSpans: spans placed at the start of the value's first line (e.g. key + colon)
+// - trailing: text after the value (e.g. a comma)
+// - fieldContext: set only for top-level fields, attaches the filter menu to the first
+//   line. Nested keys aren't real filter fields, so they get no menu.
+function appendJSONValue(container, value, depth, prefixSpans, trailing, fieldContext) {
+    // Primitive (string/number/boolean/null): single line.
+    if (value === null || typeof value !== 'object') {
+        const line = makeJSONLine(depth);
+        prefixSpans.forEach(s => line.appendChild(s));
+        line.appendChild(createValueElement(value, fieldContext ? fieldContext.fileInfo : undefined));
+        if (trailing) line.appendChild(makePunct(trailing));
+        if (fieldContext) applyFieldContext(line, fieldContext);
         container.appendChild(line);
+        return;
+    }
+
+    const isArray = Array.isArray(value);
+    const open = isArray ? '[' : '{';
+    const close = isArray ? ']' : '}';
+    const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+
+    // Empty object/array: single inline line.
+    if (entries.length === 0) {
+        const line = makeJSONLine(depth);
+        prefixSpans.forEach(s => line.appendChild(s));
+        line.appendChild(makePunct(open + close));
+        if (trailing) line.appendChild(makePunct(trailing));
+        if (fieldContext) applyFieldContext(line, fieldContext);
+        container.appendChild(line);
+        return;
+    }
+
+    // Opening line: prefix + '{' (or '[')
+    const openLine = makeJSONLine(depth);
+    prefixSpans.forEach(s => openLine.appendChild(s));
+    openLine.appendChild(makePunct(open));
+    if (fieldContext) applyFieldContext(openLine, fieldContext);
+    container.appendChild(openLine);
+
+    // Entries, indented one level deeper. Nested keys get no field context.
+    entries.forEach(([key, val], index) => {
+        const childTrailing = index < entries.length - 1 ? ',' : '';
+        let childPrefix = [];
+        if (!isArray) {
+            const keySpan = document.createElement('span');
+            keySpan.className = 'json-key';
+            keySpan.textContent = `"${key}"`;
+            childPrefix = [keySpan, makePunct(': ')];
+        }
+        appendJSONValue(container, val, depth + 1, childPrefix, childTrailing, null);
+    });
+
+    // Closing line: '}' (or ']') + trailing — aligns with the opening line's depth.
+    const closeLine = makeJSONLine(depth);
+    closeLine.appendChild(makePunct(close));
+    if (trailing) closeLine.appendChild(makePunct(trailing));
+    container.appendChild(closeLine);
+}
+
+// Create JSON element with syntax highlighting. The root is always an object
+// (log.otherFields); each top-level field also gets the filter context menu.
+function createJSONElement(obj) {
+    const container = document.createElement('div');
+    const entries = Object.entries(obj);
+
+    if (entries.length === 0) {
+        appendJSONValue(container, obj, 0, [], '', null);
         return container;
     }
 
-    // Opening brace
-    const openLine = document.createElement('div');
-    openLine.className = 'json-line';
-    openLine.style.paddingLeft = `${indent * 16}px`;
-    const openPunct = document.createElement('span');
-    openPunct.className = 'json-punctuation';
-    openPunct.textContent = '{';
-    openLine.appendChild(openPunct);
+    const openLine = makeJSONLine(0);
+    openLine.appendChild(makePunct('{'));
     container.appendChild(openLine);
 
-    // Fields
-    const entries = Object.entries(obj);
     entries.forEach(([key, value], index) => {
-        const line = document.createElement('div');
-        line.className = 'json-line filterable';
-        line.style.paddingLeft = `${(indent + 1) * 16}px`;
+        const trailing = index < entries.length - 1 ? ',' : '';
 
-        // Right-click handler for filtering by field value
-        const displayValue = value === null ? 'null' :
-            typeof value === 'object' ? JSON.stringify(value) : String(value);
-        const fileInfo = typeof value === 'string' ? parseFilePath(value) : null;
-        attachContextMenuHandler(line, key, displayValue, fileInfo);
-
-        // Key
         const keySpan = document.createElement('span');
         keySpan.className = 'json-key';
         keySpan.textContent = `"${key}"`;
-        line.appendChild(keySpan);
+        const prefix = [keySpan, makePunct(': ')];
 
-        // Colon
-        const colonSpan = document.createElement('span');
-        colonSpan.className = 'json-punctuation';
-        colonSpan.textContent = ': ';
-        line.appendChild(colonSpan);
+        const displayValue = value === null ? 'null' :
+            typeof value === 'object' ? JSON.stringify(value) : String(value);
+        const fileInfo = typeof value === 'string' ? parseFilePath(value) : null;
 
-        // Value — pass fileInfo to avoid re-parsing
-        const valueSpan = createValueElement(value, fileInfo);
-        line.appendChild(valueSpan);
-
-        // Comma
-        if (index < entries.length - 1) {
-            const commaSpan = document.createElement('span');
-            commaSpan.className = 'json-punctuation';
-            commaSpan.textContent = ',';
-            line.appendChild(commaSpan);
-        }
-
-        container.appendChild(line);
+        appendJSONValue(container, value, 1, prefix, trailing, { key, displayValue, fileInfo });
     });
 
-    // Closing brace
-    const closeLine = document.createElement('div');
-    closeLine.className = 'json-line';
-    closeLine.style.paddingLeft = `${indent * 16}px`;
-    const closePunct = document.createElement('span');
-    closePunct.className = 'json-punctuation';
-    closePunct.textContent = '}';
-    closeLine.appendChild(closePunct);
+    const closeLine = makeJSONLine(0);
+    closeLine.appendChild(makePunct('}'));
     container.appendChild(closeLine);
 
     return container;
