@@ -227,6 +227,13 @@
           "order": 9,
           "default": [],
           "markdownDescription": "Extra field names to recognize as the message, in addition to the built-in defaults (`message`, `msg`, `text`). Matching is case-insensitive. Example: `desc`."
+        },
+        "slogViewer.tagFields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "order": 10,
+          "default": [],
+          "markdownDescription": "Field names whose values are shown as tags right after the log level. Each present field renders as a `name:value` pill. Matching is case-insensitive; the field still appears in the expanded JSON. Example: `[\"service\", \"component\"]`."
         }
       }
     }

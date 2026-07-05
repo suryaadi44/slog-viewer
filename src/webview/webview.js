@@ -10,7 +10,8 @@ let config = {
     showRawJSON: false,
     autoScroll: true,
     theme: 'auto',
-    messageMaxLength: 200
+    messageMaxLength: 200,
+    tagFields: []
 };
 
 // Session management
@@ -557,6 +558,38 @@ function renderMessageContent(span, text) {
     span.appendChild(toggle);
 }
 
+// Build tag pills for the configured tagFields, in config order. Each field
+// present in otherFields (case-insensitive) renders as a `name:value` pill.
+// The value keeps its source form; objects/arrays are JSON-stringified.
+function createTagElements(otherFields) {
+    if (!config.tagFields || config.tagFields.length === 0 || !otherFields) {
+        return [];
+    }
+    // Lowercased lookup so config names match regardless of case.
+    const lower = new Map();
+    for (const [key, value] of Object.entries(otherFields)) {
+        lower.set(key.toLowerCase(), value);
+    }
+
+    const tags = [];
+    for (const name of config.tagFields) {
+        const lowerName = name.toLowerCase();
+        if (!lower.has(lowerName)) {
+            continue;
+        }
+        const value = lower.get(lowerName);
+        const valueStr = value === null || typeof value !== 'object'
+            ? String(value)
+            : JSON.stringify(value);
+
+        const tag = document.createElement('span');
+        tag.className = 'log-tag';
+        tag.textContent = `${name}:${valueStr}`;
+        tags.push(tag);
+    }
+    return tags;
+}
+
 // Create log element
 function createLogElement(log, index) {
     const entry = document.createElement('div');
@@ -594,6 +627,9 @@ function createLogElement(log, index) {
 
     header.appendChild(timestamp);
     header.appendChild(level);
+    for (const tag of createTagElements(log.otherFields)) {
+        header.appendChild(tag);
+    }
     header.appendChild(message);
 
     // Only add toggle collapse handler if there are fields to expand
@@ -923,6 +959,7 @@ function updateConfig(newConfig) {
     const oldShowRawJSON = config.showRawJSON;
     const oldTheme = config.theme;
     const oldMessageMaxLength = config.messageMaxLength;
+    const oldTagFields = JSON.stringify(config.tagFields);
 
     config = { ...config, ...newConfig };
 
@@ -940,7 +977,8 @@ function updateConfig(newConfig) {
     // Re-render logs if collapseJSON, showRawJSON, or messageMaxLength changed
     if (oldCollapseJSON !== config.collapseJSON ||
         oldShowRawJSON !== config.showRawJSON ||
-        oldMessageMaxLength !== config.messageMaxLength) {
+        oldMessageMaxLength !== config.messageMaxLength ||
+        oldTagFields !== JSON.stringify(config.tagFields)) {
         rerenderAllLogs();
     }
 }
