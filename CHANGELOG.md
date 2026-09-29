@@ -2,6 +2,36 @@
 
 All notable changes to the "Slog Viewer" extension will be documented in this file.
 
+## [1.10.0] - 2026-08-16
+
+### Added
+- **Multi-level filtering**: The level filter is now a checkbox dropdown — select any combination of Error, Warning, Info, Debug, and Trace (no selection shows all levels). The button label summarizes the current selection. (Issue #26)
+
+### Fixed
+- The "No logs match your filters" message now updates as new logs stream in, instead of going stale.
+- "Clear All Filters" now also resets the search box clear icon.
+
+## [1.9.1] - 2026-08-12
+
+### Changed
+- Slimmed the published package from ~7MB to ~67KB: the extension no longer bundles sources, tests, source maps, development config, or the demo gif. No functional changes.
+
+## [1.9.0] - 2026-08-12
+
+### Added
+- **Show Surrounding**: Right-click a log entry while filters are active and choose "Show Surrounding" to reveal the log in place — filters are temporarily suspended, the target is scrolled to center and highlighted, and a banner offers "Restore filters (Esc)". Auto-scroll pauses while active so incoming logs don't push the target away. (PR #25 by @Heming9)
+
+## [1.8.0] - 2026-08-09
+
+### Added
+- **Lazy collapsible JSON**: Nested object and array fields now render as a collapsed summary (`{ … } 3 keys`) with a toggle. Expanding builds only the next level, so deeply nested structured logs stay fast. Expanded branches are remembered across view rebuilds, and empty objects and arrays render as `{}` / `[]`. (Issue #18, PR #19 by @amirho1)
+- **Filtering on nested fields**: The right-click include/exclude menu on a nested row builds a full field path (e.g. `user.address.city`), so filters can target values below the top level.
+
+### Fixed
+- Filtering no longer breaks when a field is typed with malformed bracket syntax; such paths are now rejected instead of resolving to an unrelated field.
+- Field paths resolve own properties only, so a filter on a name like `constructor.name` no longer matches against the prototype chain.
+- Top-level keys containing a dot or bracket now build correct child paths, so filters on their nested values resolve to the right field.
+
 ## [1.7.0] - 2026-05-22
 
 ### Added

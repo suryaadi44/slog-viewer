@@ -16,19 +16,33 @@ let config = {
 
 // Session management
 // Each session stores: { info: SessionInfo, logs: ParsedLog[], filters: FilterState }
-// FilterState: { levelFilter: string, searchText: string, activeFilters: [], availableFields: Set }
+// FilterState: { selectedLevels: Set<string>, searchText: string, activeFilters: [], availableFields: Set }
 let sessions = new Map();
 let currentSessionId = null;
 
 // Runtime auto-scroll state (can be paused independently of config)
 let autoScrollActive = true;
 
+// In-place "Show Surrounding" state: while active, filters are temporarily
+// suppressed so the target log can be revealed inside the main list.
+let contextViewActive = false;
+let autoScrollWasActive = true;
+
 // Advanced filter state
 let activeFilters = [];  // Array of FilterCondition objects
 let availableFields = new Set(['message', 'level']);  // Discovered fields from logs
 let filterIdCounter = 0;  // For generating unique filter IDs
-// { field, value, fileInfo? } — fileInfo is only set when right-clicking JSON lines containing file paths
+// { field, value, fileInfo?, logIndex? } — fileInfo is only set when right-clicking JSON lines containing file paths
+// logIndex is set when right-clicking on a log entry header (for Show Surrounding)
 let contextMenuTarget = null;
+
+/** @type {WeakMap<object, Set<string>>} Tracks expanded JSON paths per log object across DOM rebuilds. */
+const expandedJsonPathsByLog = new WeakMap();
+
+const {
+    appendJsonPath,
+    getValueAtOtherFieldsPath
+} = globalThis.SlogViewerPathUtils;
 
 // Filter operators
 const FILTER_OPERATORS = {
@@ -49,8 +63,19 @@ let scrollDebounceTimeout;
 // DOM elements
 const logContainer = document.getElementById('logContainer');
 const clearBtn = document.getElementById('clearBtn');
-const levelFilter = document.getElementById('levelFilter');
+const levelFilterBtn = document.getElementById('levelFilterBtn');
+const levelFilterPanel = document.getElementById('levelFilterPanel');
 const searchInput = document.getElementById('searchInput');
+
+// Selected log levels (lowercase). Empty set = show all levels.
+let selectedLevels = new Set();
+
+const LEVEL_LABELS = { error: 'Error', warn: 'Warn', info: 'Info', debug: 'Debug', trace: 'Trace' };
+
+// Whether the current level selection hides the given log
+function logHiddenByLevel(level) {
+    return selectedLevels.size > 0 && !selectedLevels.has(level);
+}
 
 // Check if scrolled to bottom (within threshold)
 function isScrolledToBottom() {
@@ -108,7 +133,7 @@ function updateAutoScrollButton() {
 // Initialize
 function init() {
     clearBtn.addEventListener('click', handleClear);
-    levelFilter.addEventListener('change', handleFilter);
+    initLevelFilter();
     searchInput.addEventListener('input', debounce(handleSearchWithClearBtn, 300));
 
     // Search clear button
@@ -128,6 +153,12 @@ function init() {
     // Initialize advanced filtering
     initContextMenu();
     initFilterBuilder();
+
+    // Context view banner restore button
+    const contextBannerRestore = document.getElementById('contextBannerRestore');
+    if (contextBannerRestore) {
+        contextBannerRestore.addEventListener('click', exitContextView);
+    }
 
     // Apply initial theme (will be updated when config is received)
     applyTheme(config.theme);
@@ -189,7 +220,7 @@ window.addEventListener('message', event => {
 // Create default filter state for a new session
 function createDefaultFilterState() {
     return {
-        levelFilter: 'all',
+        selectedLevels: new Set(),
         searchText: '',
         activeFilters: [],
         availableFields: new Set(['message', 'level']),
@@ -249,7 +280,7 @@ function saveCurrentFilterState(sessionId) {
     if (!session) return;
 
     session.filters = {
-        levelFilter: levelFilter.value,
+        selectedLevels: new Set(selectedLevels),
         searchText: searchInput.value,
         activeFilters: [...activeFilters],
         availableFields: new Set(availableFields),
@@ -265,7 +296,8 @@ function restoreFilterState(sessionId) {
     const filters = session.filters;
 
     // Restore UI state
-    levelFilter.value = filters.levelFilter;
+    selectedLevels = new Set(filters.selectedLevels || []);
+    syncLevelFilterUI();
     searchInput.value = filters.searchText;
 
     // Update search clear button visibility
@@ -331,6 +363,10 @@ function handleSessionChange() {
 
 // Render logs for the current session
 function renderCurrentSessionLogs() {
+    // Exit Show Surrounding mode (the DOM is rebuilt; filters are re-applied below)
+    exitContextView();
+    closeLevelFilterPanel();
+
     const session = sessions.get(currentSessionId);
     const logs = session ? session.logs : [];
 
@@ -410,13 +446,16 @@ function addLogToSession(sessionId, log) {
         const logElement = createLogElement(log, session.logs.length - 1);
         logContainer.appendChild(logElement);
 
-        // Apply filters to newly added log
-        if (!logMatchesAdvancedFilters(log) ||
-            (levelFilter.value !== 'all' && log.level?.toLowerCase() !== levelFilter.value) ||
+        // Apply filters to newly added log (suppressed while Show Surrounding is active)
+        if (!contextViewActive && (!logMatchesAdvancedFilters(log) ||
+            logHiddenByLevel(log.level?.toLowerCase()) ||
             (searchInput.value && !((log.message || '').toLowerCase().includes(searchInput.value.toLowerCase()) ||
-                                    JSON.stringify(log.otherFields).toLowerCase().includes(searchInput.value.toLowerCase())))) {
+                                    JSON.stringify(log.otherFields).toLowerCase().includes(searchInput.value.toLowerCase()))))) {
             logElement.classList.add('hidden');
         }
+
+        // Keep the "no logs match" message in sync with the streamed log
+        updateNoResultsState();
 
         // Smart auto-scroll: only scroll if enabled AND active
         if (config.autoScroll && autoScrollActive) {
@@ -469,6 +508,9 @@ function replaceSessionLogs(sessionId, logs) {
 
 // Clear logs for current session only
 function clearCurrentSessionLogs() {
+    // Exit Show Surrounding mode (the list is cleared below)
+    exitContextView();
+
     const session = sessions.get(currentSessionId);
     if (session) {
         session.logs = [];
@@ -480,7 +522,8 @@ function clearCurrentSessionLogs() {
     activeFilters = [];
     availableFields = new Set(['message', 'level']);
     filterIdCounter = 0;
-    levelFilter.value = 'all';
+    selectedLevels = new Set();
+    syncLevelFilterUI();
     searchInput.value = '';
     const clearSearchBtn = document.getElementById('clearSearchBtn');
     clearSearchBtn.style.display = 'none';
@@ -653,6 +696,13 @@ function createLogElement(log, index) {
         });
     }
 
+    // Right-click on header shows context menu with Show Surrounding option
+    header.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showContextMenuForLogEntry(e, index, log.message || '');
+    });
+
     entry.appendChild(header);
 
     // Body (JSON fields)
@@ -660,7 +710,7 @@ function createLogElement(log, index) {
     body.className = config.collapseJSON ? 'log-body collapsed' : 'log-body';
 
     if (log.otherFields && Object.keys(log.otherFields).length > 0) {
-        body.appendChild(createJSONElement(log.otherFields));
+        body.appendChild(createJSONElement(log.otherFields, 0, log));
     }
 
     entry.appendChild(body);
@@ -690,121 +740,94 @@ function createLogElement(log, index) {
     return entry;
 }
 
-// A single indented row in the JSON tree
-function makeJSONLine(depth) {
-    const line = document.createElement('div');
-    line.className = 'json-line';
-    line.style.paddingLeft = `${depth * 16}px`;
-    return line;
-}
-
-// A json-punctuation span (braces, brackets, colons, commas)
-function makePunct(text) {
-    const span = document.createElement('span');
-    span.className = 'json-punctuation';
-    span.textContent = text;
-    return span;
-}
-
-// Attach the filter context menu to a top-level field's first line.
-function applyFieldContext(line, ctx) {
-    line.classList.add('filterable');
-    attachContextMenuHandler(line, ctx.key, ctx.displayValue, ctx.fileInfo);
-}
-
-// Render a JSON value as one or more indented .json-line rows appended to `container`.
-// Objects/arrays recurse into an inline tree instead of being stringified.
-// - prefixSpans: spans placed at the start of the value's first line (e.g. key + colon)
-// - trailing: text after the value (e.g. a comma)
-// - fieldContext: set only for top-level fields, attaches the filter menu to the first
-//   line. Nested keys aren't real filter fields, so they get no menu.
-function appendJSONValue(container, value, depth, prefixSpans, trailing, fieldContext) {
-    // Primitive (string/number/boolean/null): single line.
-    if (value === null || typeof value !== 'object') {
-        const line = makeJSONLine(depth);
-        prefixSpans.forEach(s => line.appendChild(s));
-        line.appendChild(createValueElement(value, fieldContext ? fieldContext.fileInfo : undefined));
-        if (trailing) line.appendChild(makePunct(trailing));
-        if (fieldContext) applyFieldContext(line, fieldContext);
-        container.appendChild(line);
-        return;
-    }
-
-    const isArray = Array.isArray(value);
-    const open = isArray ? '[' : '{';
-    const close = isArray ? ']' : '}';
-    const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
-
-    // Empty object/array: single inline line.
-    if (entries.length === 0) {
-        const line = makeJSONLine(depth);
-        prefixSpans.forEach(s => line.appendChild(s));
-        line.appendChild(makePunct(open + close));
-        if (trailing) line.appendChild(makePunct(trailing));
-        if (fieldContext) applyFieldContext(line, fieldContext);
-        container.appendChild(line);
-        return;
-    }
-
-    // Opening line: prefix + '{' (or '[')
-    const openLine = makeJSONLine(depth);
-    prefixSpans.forEach(s => openLine.appendChild(s));
-    openLine.appendChild(makePunct(open));
-    if (fieldContext) applyFieldContext(openLine, fieldContext);
-    container.appendChild(openLine);
-
-    // Entries, indented one level deeper. Nested keys get no field context.
-    entries.forEach(([key, val], index) => {
-        const childTrailing = index < entries.length - 1 ? ',' : '';
-        let childPrefix = [];
-        if (!isArray) {
-            const keySpan = document.createElement('span');
-            keySpan.className = 'json-key';
-            keySpan.textContent = `"${key}"`;
-            childPrefix = [keySpan, makePunct(': ')];
-        }
-        appendJSONValue(container, val, depth + 1, childPrefix, childTrailing, null);
-    });
-
-    // Closing line: '}' (or ']') + trailing — aligns with the opening line's depth.
-    const closeLine = makeJSONLine(depth);
-    closeLine.appendChild(makePunct(close));
-    if (trailing) closeLine.appendChild(makePunct(trailing));
-    container.appendChild(closeLine);
-}
-
-// Create JSON element with syntax highlighting. The root is always an object
-// (log.otherFields); each top-level field also gets the filter context menu.
-function createJSONElement(obj) {
+/**
+ * Create JSON element with syntax highlighting.
+ *
+ * @param {Record<string, unknown>} obj
+ * @param {number} [indent]
+ * @param {object | null} [logRef] Parsed log for lazy nested value expansion state
+ */
+function createJSONElement(obj, indent = 0, logRef = null) {
     const container = document.createElement('div');
-    const entries = Object.entries(obj);
 
-    if (entries.length === 0) {
-        appendJSONValue(container, obj, 0, [], '', null);
+    if (Object.keys(obj).length === 0) {
+        const line = document.createElement('div');
+        line.className = 'json-line';
+        line.style.paddingLeft = `${indent * 16}px`;
+
+        const punct = document.createElement('span');
+        punct.className = 'json-punctuation';
+        punct.textContent = '{}';
+        line.appendChild(punct);
+
+        container.appendChild(line);
         return container;
     }
 
-    const openLine = makeJSONLine(0);
-    openLine.appendChild(makePunct('{'));
+    // Opening brace
+    const openLine = document.createElement('div');
+    openLine.className = 'json-line';
+    openLine.style.paddingLeft = `${indent * 16}px`;
+    const openPunct = document.createElement('span');
+    openPunct.className = 'json-punctuation';
+    openPunct.textContent = '{';
+    openLine.appendChild(openPunct);
     container.appendChild(openLine);
 
+    // Fields
+    const entries = Object.entries(obj);
     entries.forEach(([key, value], index) => {
-        const trailing = index < entries.length - 1 ? ',' : '';
+        const line = document.createElement('div');
+        line.className = 'json-line filterable';
+        line.style.paddingLeft = `${(indent + 1) * 16}px`;
 
-        const keySpan = document.createElement('span');
-        keySpan.className = 'json-key';
-        keySpan.textContent = `"${key}"`;
-        const prefix = [keySpan, makePunct(': ')];
-
+        // Right-click handler for filtering by field value
         const displayValue = value === null ? 'null' :
             typeof value === 'object' ? JSON.stringify(value) : String(value);
         const fileInfo = typeof value === 'string' ? parseFilePath(value) : null;
+        attachContextMenuHandler(line, key, displayValue, fileInfo);
 
-        appendJSONValue(container, value, 1, prefix, trailing, { key, displayValue, fileInfo });
+        // Key
+        const keySpan = document.createElement('span');
+        keySpan.className = 'json-key';
+        keySpan.textContent = `"${key}"`;
+        line.appendChild(keySpan);
+
+        // Colon
+        const colonSpan = document.createElement('span');
+        colonSpan.className = 'json-punctuation';
+        colonSpan.textContent = ': ';
+        line.appendChild(colonSpan);
+
+        // Value — pass fileInfo to avoid re-parsing.
+        // Build the root path through appendJsonPath so top-level keys containing
+        // dots or brackets get quoted, matching how nested paths are built.
+        const valueSpan = createValueElement(
+            value,
+            fileInfo,
+            logRef ? { logRef, path: appendJsonPath('', key) } : null
+        );
+        line.appendChild(valueSpan);
+
+        // Comma
+        if (index < entries.length - 1) {
+            const commaSpan = document.createElement('span');
+            commaSpan.className = 'json-punctuation';
+            commaSpan.textContent = ',';
+            line.appendChild(commaSpan);
+        }
+
+        container.appendChild(line);
     });
 
-    const closeLine = makeJSONLine(0);
-    closeLine.appendChild(makePunct('}'));
+    // Closing brace
+    const closeLine = document.createElement('div');
+    closeLine.className = 'json-line';
+    closeLine.style.paddingLeft = `${indent * 16}px`;
+    const closePunct = document.createElement('span');
+    closePunct.className = 'json-punctuation';
+    closePunct.textContent = '}';
+    closeLine.appendChild(closePunct);
     container.appendChild(closeLine);
 
     return container;
@@ -827,9 +850,252 @@ function parseFilePath(value) {
     return null;
 }
 
-// Create value element with proper styling
-// fileInfo is optional — passed from createJSONElement to avoid redundant parseFilePath calls
-function createValueElement(value, fileInfo) {
+// ============================================
+// LAZY COLLAPSIBLE JSON (objects / arrays)
+// ============================================
+
+/**
+ * 
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isPlainObjectLike(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+        Object.prototype.toString.call(value) === '[object Object]';
+}
+
+/**
+ * @param {object} logRef
+ * @returns {Set<string>}
+ */
+function getOrCreateExpandedPathSet(logRef) {
+    let set = expandedJsonPathsByLog.get(logRef);
+    if (!set) {
+        set = new Set();
+        expandedJsonPathsByLog.set(logRef, set);
+    }
+    return set;
+}
+
+/** @param {object} logRef @param {string} path */
+function markJsonPathExpanded(logRef, path) {
+    getOrCreateExpandedPathSet(logRef).add(path);
+}
+
+/** @param {object} logRef @param {string} path */
+function markJsonPathCollapsed(logRef, path) {
+    const set = expandedJsonPathsByLog.get(logRef);
+    if (set) {
+        set.delete(path);
+    }
+}
+
+/** @param {object} logRef @param {string} path */
+function isJsonPathExpanded(logRef, path) {
+    const set = expandedJsonPathsByLog.get(logRef);
+    return !!set && set.has(path);
+}
+
+/**
+ * Remove all child nodes from a lazy children container (collapse).
+ *
+ * @param {HTMLElement} childrenEl
+ */
+function clearLazyChildren(childrenEl) {
+    while (childrenEl.firstChild) {
+        childrenEl.removeChild(childrenEl.firstChild);
+    }
+}
+
+/**
+ * Append one level of rows under a collapsible node; closing bracket on its own row.
+ *
+ * @param {HTMLElement} childrenEl
+ * @param {object|unknown[]} value
+ * @param {{ logRef: object, path: string }} ctx
+ * @param {string} closeCh `}` or `]`
+ */
+function appendImmediateChildren(childrenEl, value, ctx, closeCh) {
+    if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index++) {
+            const item = value[index];
+            const row = document.createElement('div');
+            row.className = 'json-lazy-row filterable';
+            const childPath = appendJsonPath(ctx.path, index);
+            const displayValue = item === null ? 'null' :
+                typeof item === 'object' ? JSON.stringify(item) : String(item);
+            const fileInfo = typeof item === 'string' ? parseFilePath(item) : null;
+            attachContextMenuHandler(row, childPath, displayValue, fileInfo);
+
+            const indexSpan = document.createElement('span');
+            indexSpan.className = 'json-key';
+            indexSpan.textContent = String(index);
+            row.appendChild(indexSpan);
+
+            const colonSpan = document.createElement('span');
+            colonSpan.className = 'json-punctuation';
+            colonSpan.textContent = ': ';
+            row.appendChild(colonSpan);
+
+            row.appendChild(createValueElement(item, fileInfo, { logRef: ctx.logRef, path: childPath }));
+
+            if (index < value.length - 1) {
+                const commaSpan = document.createElement('span');
+                commaSpan.className = 'json-punctuation';
+                commaSpan.textContent = ',';
+                row.appendChild(commaSpan);
+            }
+
+            childrenEl.appendChild(row);
+        }
+    } else {
+        const entries = Object.entries(value);
+        entries.forEach(([key, val], index) => {
+            const row = document.createElement('div');
+            row.className = 'json-lazy-row filterable';
+            const childPath = appendJsonPath(ctx.path, key);
+            const displayValue = val === null ? 'null' :
+                typeof val === 'object' ? JSON.stringify(val) : String(val);
+            const fileInfo = typeof val === 'string' ? parseFilePath(val) : null;
+            attachContextMenuHandler(row, childPath, displayValue, fileInfo);
+
+            const keySpan = document.createElement('span');
+            keySpan.className = 'json-key';
+            keySpan.textContent = `"${key}"`;
+            row.appendChild(keySpan);
+
+            const colonSpan = document.createElement('span');
+            colonSpan.className = 'json-punctuation';
+            colonSpan.textContent = ': ';
+            row.appendChild(colonSpan);
+
+            row.appendChild(createValueElement(val, fileInfo, { logRef: ctx.logRef, path: childPath }));
+
+            if (index < entries.length - 1) {
+                const commaSpan = document.createElement('span');
+                commaSpan.className = 'json-punctuation';
+                commaSpan.textContent = ',';
+                row.appendChild(commaSpan);
+            }
+
+            childrenEl.appendChild(row);
+        });
+    }
+
+    const closeLine = document.createElement('div');
+    closeLine.className = 'json-lazy-row json-lazy-close-row';
+    const closePunct = document.createElement('span');
+    closePunct.className = 'json-punctuation';
+    closePunct.textContent = closeCh;
+    closeLine.appendChild(closePunct);
+    childrenEl.appendChild(closeLine);
+}
+
+/**
+ * Build a collapsible object or array viewer (one DOM level at a time).
+ *
+ * @param {object|unknown[]} value
+ * @param {{ logRef: object, path: string }} ctx
+ * @returns {HTMLElement}
+ */
+function buildLazyValueRoot(value, ctx) {
+    const root = document.createElement('div');
+    root.className = 'json-lazy-value';
+
+    const isArray = Array.isArray(value);
+    const openCh = isArray ? '[' : '{';
+    const closeCh = isArray ? ']' : '}';
+
+    const header = document.createElement('span');
+    header.className = 'json-lazy-header';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'json-lazy-toggle collapse-icon collapsed';
+    toggle.textContent = '▼';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.title = 'Expand or collapse';
+
+    const openPunct = document.createElement('span');
+    openPunct.className = 'json-punctuation';
+    openPunct.textContent = openCh;
+
+    const suffix = document.createElement('span');
+    suffix.className = 'json-lazy-collapsed-suffix';
+
+    const ellipsis = document.createElement('span');
+    ellipsis.className = 'json-lazy-ellipsis';
+    ellipsis.textContent = ' … ';
+
+    const closePunctSuffix = document.createElement('span');
+    closePunctSuffix.className = 'json-punctuation';
+    closePunctSuffix.textContent = closeCh;
+
+    const meta = document.createElement('span');
+    meta.className = 'json-lazy-meta';
+    const count = isArray ? value.length : Object.keys(value).length;
+    meta.textContent = isArray
+        ? ` ${count} item${count === 1 ? '' : 's'}`
+        : ` ${count} key${count === 1 ? '' : 's'}`;
+
+    suffix.appendChild(ellipsis);
+    suffix.appendChild(closePunctSuffix);
+    suffix.appendChild(meta);
+
+    const childrenEl = document.createElement('div');
+    childrenEl.className = 'json-lazy-children hidden';
+
+    header.appendChild(toggle);
+    header.appendChild(openPunct);
+    header.appendChild(suffix);
+
+    root.appendChild(header);
+    root.appendChild(childrenEl);
+
+    const expand = () => {
+        clearLazyChildren(childrenEl);
+        appendImmediateChildren(childrenEl, value, ctx, closeCh);
+        suffix.style.display = 'none';
+        childrenEl.classList.remove('hidden');
+        toggle.classList.remove('collapsed');
+        toggle.setAttribute('aria-expanded', 'true');
+        markJsonPathExpanded(ctx.logRef, ctx.path);
+    };
+
+    const collapse = () => {
+        clearLazyChildren(childrenEl);
+        suffix.style.display = '';
+        childrenEl.classList.add('hidden');
+        toggle.classList.add('collapsed');
+        toggle.setAttribute('aria-expanded', 'false');
+        markJsonPathCollapsed(ctx.logRef, ctx.path);
+    };
+
+    toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (toggle.getAttribute('aria-expanded') === 'true') {
+            collapse();
+        } else {
+            expand();
+        }
+    });
+
+    if (isJsonPathExpanded(ctx.logRef, ctx.path)) {
+        expand();
+    }
+
+    return root;
+}
+
+/**
+ * Create a styled DOM node for a JSON value (primitives, file links, or lazy object/array).
+ *
+ * @param {unknown} value
+ * @param {unknown} [fileInfo] Pre-parsed file link for strings (avoids duplicate `parseFilePath`)
+ * @param {{ logRef: object, path: string } | null} [ctx] When set, plain objects and non-empty arrays render lazily
+ * @returns {HTMLElement}
+ */
+function createValueElement(value, fileInfo, ctx) {
     const span = document.createElement('span');
 
     if (value === null) {
@@ -861,11 +1127,28 @@ function createValueElement(value, fileInfo) {
             span.textContent = `"${value}"`;
         }
     } else if (Array.isArray(value)) {
-        span.className = 'json-string';
-        span.textContent = JSON.stringify(value);
+        if (value.length === 0) {
+            span.className = 'json-punctuation';
+            span.textContent = '[]';
+        } else if (ctx && ctx.logRef) {
+            return buildLazyValueRoot(value, ctx);
+        } else {
+            span.className = 'json-string';
+            span.textContent = JSON.stringify(value);
+        }
     } else if (typeof value === 'object') {
-        span.className = 'json-string';
-        span.textContent = JSON.stringify(value);
+        if (!isPlainObjectLike(value)) {
+            span.className = 'json-string';
+            span.textContent = JSON.stringify(value);
+        } else if (Object.keys(value).length === 0) {
+            span.className = 'json-punctuation';
+            span.textContent = '{}';
+        } else if (ctx && ctx.logRef) {
+            return buildLazyValueRoot(value, ctx);
+        } else {
+            span.className = 'json-string';
+            span.textContent = JSON.stringify(value);
+        }
     } else {
         span.textContent = String(value);
     }
@@ -899,24 +1182,22 @@ function handleClear() {
 }
 
 
-// Handle level filter
-function handleFilter() {
-    const level = levelFilter.value;
-    const searchText = searchInput.value;
-    applyFilters(level, searchText);
-}
-
 // Handle search
 function handleSearch() {
-    const level = levelFilter.value;
-    const searchText = searchInput.value;
-    applyFilters(level, searchText);
+    applyFilters(searchInput.value);
 }
 
 // Apply filters (level, search, and advanced filters)
-function applyFilters(level, searchText) {
+function applyFilters(searchText) {
     const logEntries = logContainer.querySelectorAll('.log-entry');
     const logs = getCurrentSessionLogs();
+
+    // While Show Surrounding is active, filters are temporarily suppressed so the
+    // target log (and everything around it) stays visible in the main list.
+    if (contextViewActive) {
+        logEntries.forEach(entry => entry.classList.remove('hidden'));
+        return;
+    }
 
     logEntries.forEach(entry => {
         const logLevel = entry.dataset.level;
@@ -929,7 +1210,7 @@ function applyFilters(level, searchText) {
         }
 
         // Level filter
-        const levelMatch = level === 'all' || logLevel === level.toLowerCase();
+        const levelMatch = !logHiddenByLevel(logLevel);
 
         // Search filter
         let searchMatch = true;
@@ -1000,6 +1281,9 @@ function applyTheme(theme) {
 
 // Re-render all log entries (used when display settings change)
 function rerenderAllLogs() {
+    // Exit Show Surrounding mode (the DOM is rebuilt; filters are re-applied below)
+    exitContextView();
+
     const logs = getCurrentSessionLogs();
 
     // Clear the container
@@ -1120,7 +1404,10 @@ function matchFilter(log, filter) {
     } else if (field === 'level') {
         fieldValue = log.level || '';
     } else {
-        fieldValue = log.otherFields?.[field];
+        fieldValue = getValueAtOtherFieldsPath(log.otherFields, field);
+        if (fieldValue === undefined) {
+            fieldValue = log.otherFields?.[field];
+        }
         if (fieldValue === undefined || fieldValue === null) return false;
     }
 
@@ -1132,14 +1419,16 @@ function matchFilter(log, filter) {
 function getFieldValue(log, field) {
     if (field === 'message') return log.message || '';
     if (field === 'level') return log.level || '';
+    const nested = getValueAtOtherFieldsPath(log.otherFields, field);
+    if (nested !== undefined) {
+        return typeof nested === 'object' ? JSON.stringify(nested) : String(nested);
+    }
     return log.otherFields?.[field] ?? '';
 }
 
 // Apply all filters (level, search, and advanced)
 function applyAllFilters() {
-    const level = levelFilter.value;
-    const searchText = searchInput.value;
-    applyFilters(level, searchText);
+    applyFilters(searchInput.value);
 }
 
 // Render filter chips in the filter area
@@ -1266,7 +1555,7 @@ function updateNoResultsState() {
 
     let noResults = logContainer.querySelector('.no-filter-results');
 
-    if (hasLogs && visibleCount === 0 && (activeFilters.length > 0 || levelFilter.value !== 'all' || searchInput.value)) {
+    if (hasLogs && visibleCount === 0 && (activeFilters.length > 0 || selectedLevels.size > 0 || searchInput.value)) {
         if (!noResults) {
             noResults = document.createElement('div');
             noResults.className = 'no-filter-results';
@@ -1279,8 +1568,13 @@ function updateNoResultsState() {
 
             document.getElementById('clearFiltersBtn').addEventListener('click', () => {
                 clearAllAdvancedFilters();
-                levelFilter.value = 'all';
+                selectedLevels = new Set();
+                syncLevelFilterUI();
                 searchInput.value = '';
+                const clearSearchBtn = document.getElementById('clearSearchBtn');
+                if (clearSearchBtn) {
+                    clearSearchBtn.style.display = 'none';
+                }
                 applyAllFilters();
             });
         }
@@ -1302,9 +1596,22 @@ function attachContextMenuHandler(element, field, value, fileInfo) {
     });
 }
 
-// Show context menu on right-click
+// Whether any filter (level, search, or advanced) is currently active.
+// "Show Surrounding" is hidden from the context menu when there's nothing to
+// filter out — revealing the log would just show what's already visible.
+function hasActiveFilters() {
+    return selectedLevels.size > 0 ||
+        (searchInput.value && searchInput.value.trim()) ||
+        activeFilters.length > 0;
+}
+
+// Show context menu on right-click (field-level: message, JSON fields)
 function showContextMenu(e, field, value, fileInfo) {
-    contextMenuTarget = { field, value: String(value), fileInfo: fileInfo || null };
+    // Find the parent log entry to get the log index for Show Surrounding
+    const logEntry = e.target.closest('.log-entry');
+    const logIndex = logEntry ? parseInt(logEntry.dataset.index, 10) : null;
+
+    contextMenuTarget = { field, value: String(value), fileInfo: fileInfo || null, logIndex: logIndex };
 
     const menu = document.getElementById('contextMenu');
     menu.classList.remove('hidden');
@@ -1328,8 +1635,52 @@ function showContextMenu(e, field, value, fileInfo) {
         fileSeparator.style.display = showFile ? '' : 'none';
     }
 
-    // Position menu near click, but keep on screen
-    const menuRect = menu.getBoundingClientRect();
+    // Show "Show Surrounding" if we found a parent log entry and there are
+    // active filters to suppress (no filters = nothing to reveal)
+    const showContext = logIndex != null && hasActiveFilters();
+    const viewContextItem = document.getElementById('contextMenuViewContext');
+    const contextSeparator = document.getElementById('contextMenuContextSeparator');
+    if (viewContextItem) { viewContextItem.style.display = showContext ? '' : 'none'; }
+    if (contextSeparator) { contextSeparator.style.display = showContext ? '' : 'none'; }
+
+    positionContextMenu(menu, e);
+}
+
+// Show context menu on right-click on a log entry header (includes Show Surrounding)
+function showContextMenuForLogEntry(e, logIndex, message) {
+    contextMenuTarget = { field: 'message', value: String(message), fileInfo: null, logIndex: logIndex };
+
+    const menu = document.getElementById('contextMenu');
+    menu.classList.remove('hidden');
+
+    // Update include/exclude with message field
+    const includeItem = menu.querySelector('[data-action="include"]');
+    const excludeItem = menu.querySelector('[data-action="exclude"]');
+    const truncatedValue = contextMenuTarget.value.length > 30
+        ? contextMenuTarget.value.substring(0, 30) + '...'
+        : contextMenuTarget.value;
+
+    includeItem.innerHTML = `<span class="menu-icon">+</span> Include message = "${escapeHtml(truncatedValue)}"`;
+    excludeItem.innerHTML = `<span class="menu-icon">-</span> Exclude message = "${escapeHtml(truncatedValue)}"`;
+
+    // Hide "Open file" (no file info from header click)
+    const openFileItem = document.getElementById('contextMenuOpenFile');
+    const fileSeparator = document.getElementById('contextMenuFileSeparator');
+    if (openFileItem) { openFileItem.style.display = 'none'; }
+    if (fileSeparator) { fileSeparator.style.display = 'none'; }
+
+    // Show "Show Surrounding" only when there are active filters to suppress
+    const showContext = hasActiveFilters();
+    const viewContextItem = document.getElementById('contextMenuViewContext');
+    const contextSeparator = document.getElementById('contextMenuContextSeparator');
+    if (viewContextItem) { viewContextItem.style.display = showContext ? '' : 'none'; }
+    if (contextSeparator) { contextSeparator.style.display = showContext ? '' : 'none'; }
+
+    positionContextMenu(menu, e);
+}
+
+// Position context menu near click, keeping it on screen
+function positionContextMenu(menu, e) {
     let x = e.clientX;
     let y = e.clientY;
 
@@ -1365,6 +1716,11 @@ function handleContextMenuAction(action) {
     const { field, value } = contextMenuTarget;
 
     switch (action) {
+        case 'view_context':
+            if (contextMenuTarget.logIndex != null) {
+                openContextView(contextMenuTarget.logIndex);
+            }
+            break;
         case 'include':
             addFilter(field, 'equals', value, 'include');
             break;
@@ -1400,11 +1756,22 @@ function initContextMenu() {
     document.addEventListener('click', hideContextMenu);
     document.addEventListener('contextmenu', hideContextMenu);
 
-    // Handle Escape key
+    // Handle Escape key: close exactly one transient UI per press, topmost first
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
-            hideContextMenu();
-            // Also hide filter builder
+            const menu = document.getElementById('contextMenu');
+            if (menu && !menu.classList.contains('hidden')) {
+                hideContextMenu();
+                return;
+            }
+            if (contextViewActive) {
+                exitContextView();
+                return;
+            }
+            if (isLevelFilterPanelOpen()) {
+                closeLevelFilterPanel({ refocus: true });
+                return;
+            }
             const filterBuilder = document.getElementById('filterBuilder');
             if (filterBuilder && !filterBuilder.classList.contains('hidden')) {
                 filterBuilder.classList.add('hidden');
@@ -1423,6 +1790,198 @@ function initContextMenu() {
             });
         });
     }
+}
+
+// ============================================
+// CONTEXT VIEW (in-place reveal)
+// ============================================
+
+// Reveal a log entry inside the main list: temporarily suppress the active
+// filters, scroll the target into view, highlight it, and show the restore
+// banner. Re-targeting works too — invoking it on another log while already
+// active just moves the highlight and re-centers.
+function openContextView(targetIndex) {
+    const session = sessions.get(currentSessionId);
+    if (!session || !session.logs[targetIndex]) return;
+
+    const entering = !contextViewActive;
+    contextViewActive = true;
+    closeLevelFilterPanel();
+
+    // Pause auto-scroll so new logs don't push the target away while reading
+    if (entering) {
+        autoScrollWasActive = autoScrollActive;
+        autoScrollActive = false;
+        updateAutoScrollButton();
+    }
+
+    // Show the restore banner
+    const banner = document.getElementById('contextBanner');
+    if (banner) {
+        banner.classList.remove('hidden');
+    }
+
+    // Move the highlight to the new target
+    const previousTarget = logContainer.querySelector('.log-entry.context-target');
+    if (previousTarget) {
+        previousTarget.classList.remove('context-target');
+    }
+    const targetEl = logContainer.querySelector(`.log-entry[data-index="${targetIndex}"]`);
+    if (targetEl) {
+        targetEl.classList.add('context-target');
+    }
+
+    // Show every log (filters are suppressed while contextViewActive is set)
+    applyAllFilters();
+
+    // Scroll the target into the center of the viewport
+    requestAnimationFrame(() => {
+        const el = logContainer.querySelector('.log-entry.context-target');
+        if (el) {
+            el.scrollIntoView({ block: 'center' });
+        }
+    });
+}
+
+// Restore the previous filters and leave Show Surrounding mode.
+function exitContextView() {
+    if (!contextViewActive) return;
+
+    contextViewActive = false;
+
+    // Remove highlight
+    const targetEl = logContainer.querySelector('.log-entry.context-target');
+    if (targetEl) {
+        targetEl.classList.remove('context-target');
+    }
+
+    // Hide the restore banner
+    const banner = document.getElementById('contextBanner');
+    if (banner) {
+        banner.classList.add('hidden');
+    }
+
+    // Restore the auto-scroll state from before entering context view
+    autoScrollActive = autoScrollWasActive;
+    updateAutoScrollButton();
+
+    // Re-apply the real filters (re-hides logs that don't match)
+    applyAllFilters();
+}
+
+// ============================================
+// LEVEL FILTER DROPDOWN (multi-select)
+// ============================================
+
+function isLevelFilterPanelOpen() {
+    return levelFilterPanel && !levelFilterPanel.classList.contains('hidden');
+}
+
+function openLevelFilterPanel(focusFirst) {
+    if (!levelFilterPanel) return;
+
+    // Only one popover at a time
+    hideContextMenu();
+    const filterBuilder = document.getElementById('filterBuilder');
+    if (filterBuilder && !filterBuilder.classList.contains('hidden')) {
+        filterBuilder.classList.add('hidden');
+        renderFilterChips();
+    }
+
+    levelFilterPanel.classList.remove('hidden');
+    levelFilterBtn.setAttribute('aria-expanded', 'true');
+
+    // Move focus into the panel only on keyboard opens — after a mouse click
+    // the programmatic focus would draw a focus ring on the first checkbox
+    if (focusFirst) {
+        const firstCheckbox = levelFilterPanel.querySelector('input[type="checkbox"]');
+        if (firstCheckbox) {
+            firstCheckbox.focus();
+        }
+    }
+}
+
+function closeLevelFilterPanel(options) {
+    if (!isLevelFilterPanelOpen()) return;
+
+    levelFilterPanel.classList.add('hidden');
+    levelFilterBtn.setAttribute('aria-expanded', 'false');
+
+    if (options && options.refocus) {
+        levelFilterBtn.focus();
+    }
+}
+
+// Sync the trigger label and checkbox states with selectedLevels
+function syncLevelFilterUI() {
+    if (!levelFilterBtn || !levelFilterPanel) return;
+
+    levelFilterPanel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = selectedLevels.has(cb.value);
+    });
+
+    let label;
+    if (selectedLevels.size === 0) {
+        label = 'All Levels';
+    } else if (selectedLevels.size <= 2) {
+        // Fixed order so the label doesn't depend on click order
+        label = Object.keys(LEVEL_LABELS)
+            .filter(l => selectedLevels.has(l))
+            .map(l => LEVEL_LABELS[l])
+            .join('+');
+    } else {
+        label = `${selectedLevels.size} levels`;
+    }
+    levelFilterBtn.textContent = label;
+    levelFilterBtn.title = selectedLevels.size === 0
+        ? 'Filter by log level'
+        : 'Showing: ' + Object.keys(LEVEL_LABELS)
+            .filter(l => selectedLevels.has(l))
+            .map(l => LEVEL_LABELS[l])
+            .join(', ');
+}
+
+function initLevelFilter() {
+    if (!levelFilterBtn || !levelFilterPanel) return;
+
+    levelFilterBtn.addEventListener('click', (e) => {
+        if (isLevelFilterPanelOpen()) {
+            closeLevelFilterPanel();
+        } else {
+            // e.detail is 0 for keyboard-triggered clicks (Enter/Space)
+            openLevelFilterPanel(e.detail === 0);
+        }
+    });
+
+    levelFilterPanel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => {
+            if (cb.checked) {
+                selectedLevels.add(cb.value);
+            } else {
+                selectedLevels.delete(cb.value);
+            }
+            syncLevelFilterUI();
+            applyAllFilters();
+        });
+    });
+
+    const levelClearBtn = document.getElementById('levelFilterClear');
+    if (levelClearBtn) {
+        levelClearBtn.addEventListener('click', () => {
+            selectedLevels = new Set();
+            syncLevelFilterUI();
+            applyAllFilters();
+        });
+    }
+
+    // Close on click outside the wrapper (clicks inside keep it open)
+    document.addEventListener('click', (e) => {
+        if (isLevelFilterPanelOpen() && !e.target.closest('#levelFilterWrapper')) {
+            closeLevelFilterPanel();
+        }
+    });
+
+    syncLevelFilterUI();
 }
 
 // ============================================
