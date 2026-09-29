@@ -301,8 +301,7 @@ export function parseJSONLog(line: string, aliases: FieldAliases = EMPTY_ALIASES
     const levelKeys = [...LEVEL_KEYS, ...aliases.level];
     const messageKeys = [...MESSAGE_KEYS, ...aliases.message];
 
-    // Lowercased view of the object's keys, used for case-insensitive matching
-    // by both field extraction and the otherFields exclusion.
+    // Lowercased view of the object's keys, used for case-insensitive field extraction.
     const lowerKeyMap = new Map<string, any>();
     for (const [key, value] of Object.entries(obj)) {
       lowerKeyMap.set(key.toLowerCase(), value);
@@ -334,17 +333,9 @@ export function parseJSONLog(line: string, aliases: FieldAliases = EMPTY_ALIASES
       }
     }
 
-    // Get other fields (excluding every recognized timestamp/level/message key).
-    // Uses the same lowercased name set as extraction so the two cannot disagree.
-    const recognizedKeys = new Set(
-      [...timeKeys, ...levelKeys, ...messageKeys].map(k => k.toLowerCase())
-    );
-    const otherFields: Record<string, any> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (!recognizedKeys.has(key.toLowerCase())) {
-        otherFields[key] = value;
-      }
-    }
+    // Keep every field (including the extracted timestamp/level/message keys,
+    // with their original values) so the JSON details mirror the source log.
+    const otherFields: Record<string, any> = { ...obj };
 
     return {
       timestamp,

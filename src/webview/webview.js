@@ -725,12 +725,8 @@ function createLogElement(log, index) {
         originalHeader.textContent = 'Raw JSON:';
 
         const originalContent = document.createElement('pre');
-        originalContent.textContent = JSON.stringify({
-            time: log.timestamp,
-            level: log.level,
-            message: log.message,
-            ...log.otherFields
-        }, null, 2);
+        // otherFields holds every field of the source log, so it is the raw JSON.
+        originalContent.textContent = JSON.stringify(log.otherFields, null, 2);
 
         original.appendChild(originalHeader);
         original.appendChild(originalContent);

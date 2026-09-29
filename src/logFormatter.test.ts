@@ -23,6 +23,18 @@ describe('logFormatter', () => {
       expect(result?.level).toBe('INFO');
     });
 
+    it('should keep all fields in otherFields with their original values', () => {
+      const result = parseJSONLog('{"time":"2024-01-01","level":"info","msg":"hello","text":"body"}');
+      expect(result?.message).toBe('hello');
+      expect(result?.level).toBe('INFO');
+      expect(result?.otherFields).toEqual({
+        time: '2024-01-01',
+        level: 'info',
+        msg: 'hello',
+        text: 'body',
+      });
+    });
+
     it('should parse JSON with escaped quotes in message', () => {
       const input = '{"time":"2024-01-01","level":"info","msg":"Hello \\"World\\""}';
       const result = parseJSONLog(input);
@@ -55,11 +67,11 @@ describe('logFormatter', () => {
       expect(result?.timestamp).toBe('2024-01-01T12:00:00.000Z');
     });
 
-    it('should exclude log.level from otherFields', () => {
+    it('should keep log.level in otherFields', () => {
       const input = '{"@timestamp":"2024-01-01T12:00:00.000Z","log.level":"INFO","message":"test"}';
       const result = parseJSONLog(input);
       expect(result).not.toBeNull();
-      expect(result?.otherFields['log.level']).toBeUndefined();
+      expect(result?.otherFields['log.level']).toBe('INFO');
     });
 
     it('should parse ECS log with all common ECS fields', () => {
@@ -170,12 +182,12 @@ describe('logFormatter', () => {
       expect(result?.message).toBe('title 1');
     });
 
-    it('should keep aliased fields out of otherFields', () => {
+    it('should keep aliased fields in otherFields', () => {
       const input = '{"asctime":"2026-04-17 12:10:02","levelname":"INFO","desc":"title 1"}';
       const result = parseJSONLog(input, pythonAliases);
-      expect(result?.otherFields.asctime).toBeUndefined();
-      expect(result?.otherFields.levelname).toBeUndefined();
-      expect(result?.otherFields.desc).toBeUndefined();
+      expect(result?.otherFields.asctime).toBe('2026-04-17 12:10:02');
+      expect(result?.otherFields.levelname).toBe('INFO');
+      expect(result?.otherFields.desc).toBe('title 1');
     });
 
     it('should leave aliased JSON fields in otherFields when no aliases supplied', () => {
@@ -200,7 +212,7 @@ describe('logFormatter', () => {
       expect(result?.timestamp).toBe('2026-04-17');
       expect(result?.level).toBe('WARN');
       expect(result?.message).toBe('hi');
-      expect(result?.otherFields.AscTime).toBeUndefined();
+      expect(result?.otherFields.AscTime).toBe('2026-04-17');
     });
 
     it('should detect aliased logfmt logs only when aliases are supplied', () => {
