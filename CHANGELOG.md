@@ -2,6 +2,11 @@
 
 All notable changes to the "Slog Viewer" extension will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Copy a single log**: Each log row has a copy button (shown on hover or keyboard focus) that copies the log as pretty-printed JSON.
+
 ## [1.10.0] - 2026-08-16
 
 ### Added

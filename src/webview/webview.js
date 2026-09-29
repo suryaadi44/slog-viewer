@@ -56,6 +56,8 @@ const {
     getValueAtOtherFieldsPath
 } = globalThis.SlogViewerPathUtils;
 
+const { formatLogForCopy } = globalThis.SlogViewerLogCopy;
+
 // Filter operators
 const FILTER_OPERATORS = {
     contains: (fieldValue, filterValue) =>
@@ -645,6 +647,47 @@ function createTagElements(otherFields) {
     return tags;
 }
 
+const COPY_ICON_SVG = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
+    '<rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+    '<path d="M3.5 11H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v.5" fill="none" stroke="currentColor" stroke-width="1.3"/>' +
+    '</svg>';
+const COPY_FEEDBACK_MS = 1200;
+
+// Per-row button that copies the log as pretty-printed JSON
+function createCopyButton(log) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'log-copy-btn';
+    button.title = 'Copy log as JSON';
+    button.setAttribute('aria-label', 'Copy log as JSON');
+    button.innerHTML = COPY_ICON_SVG;
+
+    let resetTimer = null;
+    const showFeedback = (state, glyph, label) => {
+        clearTimeout(resetTimer);
+        button.classList.remove('copied', 'failed');
+        button.classList.add(state);
+        button.textContent = glyph;
+        button.title = label;
+        resetTimer = setTimeout(() => {
+            button.classList.remove(state);
+            button.innerHTML = COPY_ICON_SVG;
+            button.title = 'Copy log as JSON';
+        }, COPY_FEEDBACK_MS);
+    };
+
+    button.addEventListener('click', (e) => {
+        // Don't toggle the row's expand/collapse
+        e.stopPropagation();
+        navigator.clipboard.writeText(formatLogForCopy(log)).then(
+            () => showFeedback('copied', '✓', 'Copied'),
+            () => showFeedback('failed', '✗', 'Copy failed')
+        );
+    });
+
+    return button;
+}
+
 // Create log element
 function createLogElement(log, index) {
     const entry = document.createElement('div');
@@ -686,6 +729,7 @@ function createLogElement(log, index) {
         header.appendChild(tag);
     }
     header.appendChild(message);
+    header.appendChild(createCopyButton(log));
 
     // Only add toggle collapse handler if there are fields to expand
     if (hasOtherFields) {

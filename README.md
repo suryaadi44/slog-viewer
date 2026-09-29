@@ -13,6 +13,7 @@ Beautiful structured log viewer for debugging. Automatically transforms JSON/log
 - **Advanced Filtering**: Right-click any field to include/exclude logs by value
 - **Filtering & Search**: Filter by log level and search across messages
 - **Export Logs**: Copy or save filtered logs as JSON, CSV, or text
+- **Copy a Single Log**: Hover a log row and click its copy button to copy that log as pretty-printed JSON
 - **Collapsible Fields**: Click to expand/collapse log details
 - **Works with Any Language**: Go slog, Node.js pino, Python structlog, and more
 
