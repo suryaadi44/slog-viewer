@@ -7,6 +7,7 @@ const MAX_LOGS = 5000;
 // State
 let config = {
     collapseJSON: true,
+    expandNestedJSONOnOpen: false,
     showRawJSON: false,
     autoScroll: true,
     theme: 'auto',
@@ -42,6 +43,13 @@ let contextMenuTarget = null;
  * kept across DOM rebuilds. Paths without an entry follow `config.collapseJSON`.
  */
 const jsonPathStateByLog = new WeakMap();
+
+/**
+ * @type {WeakSet<object>}
+ * Log objects opened by the user while `config.expandNestedJSONOnOpen` is on;
+ * their untoggled JSON paths default to expanded.
+ */
+const deepExpandedLogs = new WeakSet();
 
 const {
     appendJsonPath,
@@ -686,6 +694,10 @@ function createLogElement(log, index) {
             const icon = entry.querySelector('.collapse-icon');
 
             if (body.classList.contains('collapsed')) {
+                if (config.expandNestedJSONOnOpen && !deepExpandedLogs.has(log)) {
+                    deepExpandedLogs.add(log);
+                    body.replaceChildren(createJSONElement(log.otherFields, 0, log));
+                }
                 body.classList.remove('collapsed');
                 icon.classList.remove('collapsed');
                 // Pause auto-scroll when user expands a log entry
@@ -892,6 +904,9 @@ function isJsonPathExpanded(logRef, path) {
     const state = jsonPathStateByLog.get(logRef);
     if (state && state.has(path)) {
         return state.get(path);
+    }
+    if (config.expandNestedJSONOnOpen && deepExpandedLogs.has(logRef)) {
+        return true;
     }
     return !config.collapseJSON;
 }
@@ -1241,6 +1256,7 @@ function applyFilters(searchText) {
 function updateConfig(newConfig) {
     const wasAutoScrollEnabled = config.autoScroll;
     const oldCollapseJSON = config.collapseJSON;
+    const oldExpandNestedJSONOnOpen = config.expandNestedJSONOnOpen;
     const oldShowRawJSON = config.showRawJSON;
     const oldTheme = config.theme;
     const oldMessageMaxLength = config.messageMaxLength;
@@ -1259,8 +1275,9 @@ function updateConfig(newConfig) {
         applyTheme(config.theme);
     }
 
-    // Re-render logs if collapseJSON, showRawJSON, or messageMaxLength changed
+    // Re-render logs if collapseJSON, expandNestedJSONOnOpen, showRawJSON, or messageMaxLength changed
     if (oldCollapseJSON !== config.collapseJSON ||
+        oldExpandNestedJSONOnOpen !== config.expandNestedJSONOnOpen ||
         oldShowRawJSON !== config.showRawJSON ||
         oldMessageMaxLength !== config.messageMaxLength ||
         oldTagFields !== JSON.stringify(config.tagFields)) {

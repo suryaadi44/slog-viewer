@@ -116,6 +116,7 @@ export interface RequestFormattedLogsMessage {
  */
 export interface WebviewConfig {
   collapseJSON: boolean;
+  expandNestedJSONOnOpen: boolean;
   showRawJSON: boolean;
   autoScroll: boolean;
   theme: 'light' | 'dark' | 'auto';

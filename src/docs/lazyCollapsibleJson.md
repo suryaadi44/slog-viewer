@@ -6,6 +6,8 @@ Structured log fields (`log.otherFields`) can be large nested objects or arrays.
 
 The **default** state of a node the user has not toggled follows the `slogViewer.collapseJSON` setting: collapsed when `true`, expanded when `false` (so with `false` the whole tree is built up front).
 
+When `slogViewer.expandNestedJSONOnOpen` is `true`, opening a log entry (clicking its header) adds that `ParsedLog` to `deepExpandedLogs` (a **`WeakSet`**) and rebuilds its body; untoggled paths of logs in that set default to **expanded**, so the whole tree opens on click. Other logs keep the `collapseJSON` default. Resolution order in `isJsonPathExpanded`: user toggle entry → `deepExpandedLogs` membership (when the setting is on) → `!collapseJSON`.
+
 ### Where state lives
 
 | State                      | Location                                                                                                   | Role                                                                                                         |

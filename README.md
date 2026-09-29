@@ -133,6 +133,7 @@ Access via VSCode Settings → "Slog Viewer":
 |---------|---------|-------------|
 | `slogViewer.autoReveal` | `true` | Automatically reveal the panel when the first structured log is detected. Set to `false` to open the panel manually. |
 | `slogViewer.collapseJSON` | `true` | Show log details and nested JSON objects/arrays collapsed by default (click to expand). When `false`, nested fields are expanded too. |
+| `slogViewer.expandNestedJSONOnOpen` | `false` | When a log entry is clicked open, automatically expand all of its nested JSON objects/arrays. Only applies when `collapseJSON` is `true`. |
 | `slogViewer.showRawJSON` | `false` | Show the raw JSON log below each formatted entry |
 | `slogViewer.autoScroll` | `true` | Automatically scroll to the latest log entry |
 | `slogViewer.theme` | `auto` | Theme for the log viewer (`light`, `dark`, or `auto`) |
