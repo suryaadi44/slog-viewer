@@ -36,8 +36,12 @@ let filterIdCounter = 0;  // For generating unique filter IDs
 // logIndex is set when right-clicking on a log entry header (for Show Surrounding)
 let contextMenuTarget = null;
 
-/** @type {WeakMap<object, Set<string>>} Tracks expanded JSON paths per log object across DOM rebuilds. */
-const expandedJsonPathsByLog = new WeakMap();
+/**
+ * @type {WeakMap<object, Map<string, boolean>>}
+ * Per log object, JSON paths the user explicitly expanded (true) or collapsed (false),
+ * kept across DOM rebuilds. Paths without an entry follow `config.collapseJSON`.
+ */
+const jsonPathStateByLog = new WeakMap();
 
 const {
     appendJsonPath,
@@ -862,34 +866,34 @@ function isPlainObjectLike(value) {
 
 /**
  * @param {object} logRef
- * @returns {Set<string>}
+ * @returns {Map<string, boolean>}
  */
-function getOrCreateExpandedPathSet(logRef) {
-    let set = expandedJsonPathsByLog.get(logRef);
-    if (!set) {
-        set = new Set();
-        expandedJsonPathsByLog.set(logRef, set);
+function getOrCreateJsonPathState(logRef) {
+    let state = jsonPathStateByLog.get(logRef);
+    if (!state) {
+        state = new Map();
+        jsonPathStateByLog.set(logRef, state);
     }
-    return set;
+    return state;
 }
 
 /** @param {object} logRef @param {string} path */
 function markJsonPathExpanded(logRef, path) {
-    getOrCreateExpandedPathSet(logRef).add(path);
+    getOrCreateJsonPathState(logRef).set(path, true);
 }
 
 /** @param {object} logRef @param {string} path */
 function markJsonPathCollapsed(logRef, path) {
-    const set = expandedJsonPathsByLog.get(logRef);
-    if (set) {
-        set.delete(path);
-    }
+    getOrCreateJsonPathState(logRef).set(path, false);
 }
 
 /** @param {object} logRef @param {string} path */
 function isJsonPathExpanded(logRef, path) {
-    const set = expandedJsonPathsByLog.get(logRef);
-    return !!set && set.has(path);
+    const state = jsonPathStateByLog.get(logRef);
+    if (state && state.has(path)) {
+        return state.get(path);
+    }
+    return !config.collapseJSON;
 }
 
 /**
@@ -1055,7 +1059,6 @@ function buildLazyValueRoot(value, ctx) {
         childrenEl.classList.remove('hidden');
         toggle.classList.remove('collapsed');
         toggle.setAttribute('aria-expanded', 'true');
-        markJsonPathExpanded(ctx.logRef, ctx.path);
     };
 
     const collapse = () => {
@@ -1064,15 +1067,17 @@ function buildLazyValueRoot(value, ctx) {
         childrenEl.classList.add('hidden');
         toggle.classList.add('collapsed');
         toggle.setAttribute('aria-expanded', 'false');
-        markJsonPathCollapsed(ctx.logRef, ctx.path);
     };
 
     toggle.addEventListener('click', (e) => {
         e.stopPropagation();
+        // Only user toggles are recorded; untouched paths keep following config.collapseJSON.
         if (toggle.getAttribute('aria-expanded') === 'true') {
             collapse();
+            markJsonPathCollapsed(ctx.logRef, ctx.path);
         } else {
             expand();
+            markJsonPathExpanded(ctx.logRef, ctx.path);
         }
     });
 

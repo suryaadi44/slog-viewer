@@ -4,11 +4,13 @@
 
 Structured log fields (`log.otherFields`) can be large nested objects or arrays. The viewer renders **only one level at a time**: collapsed nodes show a short summary (`{ … }` / `[ … ]` plus counts). **Expanding** builds the immediate children in the DOM; **collapsing** removes those nodes again. That keeps work and DOM size proportional to what the user has opened, not to the full tree depth.
 
+The **default** state of a node the user has not toggled follows the `slogViewer.collapseJSON` setting: collapsed when `true`, expanded when `false` (so with `false` the whole tree is built up front).
+
 ### Where state lives
 
 | State                      | Location                                                                                                   | Role                                                                                                         |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Expanded paths per log** | `expandedJsonPathsByLog` — a **`WeakMap`** keyed by the **same `ParsedLog` object** used in `session.logs` | Value: `Set<string>` of JSON paths (e.g. `user`, `user.address`, `items[0]`) that are currently **expanded** |
+| **Toggled paths per log**  | `jsonPathStateByLog` — a **`WeakMap`** keyed by the **same `ParsedLog` object** used in `session.logs`     | Value: `Map<string, boolean>` of JSON paths (e.g. `user`, `user.address`, `items[0]`) the user explicitly **expanded** (`true`) or **collapsed** (`false`). Paths without an entry use the `collapseJSON` default |
 | **Transient UI**           | DOM under each `.json-lazy-children` container                                                             | Only exists while the node is expanded; removed on collapse                                                  |
 | **Context menu**           | `contextMenuTarget` (separate variable)                                                                    | Holds `{ field, value, fileInfo }` for the **last right‑click**; not tied to lazy expansion                  |
 
@@ -25,8 +27,8 @@ flowchart TB
   subgraph data [Data layer]
     logObj[ParsedLog object in session.logs]
     otherFields[log.otherFields]
-    weakMap[expandedJsonPathsByLog WeakMap]
-    pathSet["Set of expanded path strings"]
+    weakMap[jsonPathStateByLog WeakMap]
+    pathSet["Map of path to expanded/collapsed"]
     logObj --> otherFields
     logObj -.->|key| weakMap
     weakMap --> pathSet
@@ -55,24 +57,25 @@ flowchart TD
   start[User sees collapsed summary]
   clickExpand[User clicks toggle]
   append[appendImmediateChildren: one DOM level]
-  markAdd["markJsonPathExpanded: add ctx.path to WeakMap Set"]
+  markAdd["markJsonPathExpanded: set ctx.path to true"]
   expanded[Children visible in DOM]
 
   clickCollapse[User clicks toggle again]
   clear[clearLazyChildren: remove all child nodes]
-  markDel["markJsonPathCollapsed: delete ctx.path from Set"]
+  markDel["markJsonPathCollapsed: set ctx.path to false"]
   collapsed[Summary visible again]
 
   start --> clickExpand --> append --> markAdd --> expanded
   expanded --> clickCollapse --> clear --> markDel --> collapsed
 ```
 
-- **Expand**: fills the children container once for that level, sets `aria-expanded`, shows the block, **`Set.add(path)`**.
-- **Collapse**: empties the children container (next expand rebuilds that level), hides the block, **`Set.delete(path)`** for **that node only**. Deeper paths can remain in the `Set`; when the parent is expanded again, nested nodes whose paths are still in the `Set` can auto-expand on rebuild.
+- **Expand**: fills the children container once for that level, sets `aria-expanded`, shows the block. On a user click, **`Map.set(path, true)`**.
+- **Collapse**: empties the children container (next expand rebuilds that level), hides the block. On a user click, **`Map.set(path, false)`** for **that node only**. Deeper paths keep their entries; when the parent is expanded again, nested nodes restore their toggled state (or fall back to the `collapseJSON` default).
+- Only **user clicks** write to the `Map`. Automatic expansion during render (from the default or a remembered entry) does not, so untouched paths keep following `collapseJSON` when the setting changes.
 
 ### After a full DOM rebuild (same log object)
 
-`renderCurrentSessionLogs` / `rerenderAllLogs` replace the log list DOM but keep **`session.logs` references**. On `buildLazyValueRoot`, if `isJsonPathExpanded(logRef, path)` is true, **`expand()`** runs immediately so the tree matches the **WeakMap** again.
+`renderCurrentSessionLogs` / `rerenderAllLogs` replace the log list DOM but keep **`session.logs` references**. On `buildLazyValueRoot`, if `isJsonPathExpanded(logRef, path)` is true (remembered entry, else `!config.collapseJSON`), **`expand()`** runs immediately so the tree matches the **WeakMap** again.
 
 This applies only to rebuilds that keep the same `ParsedLog` objects. Field-alias setting changes use `replaceSessionLogs`, which re-parses each raw line and replaces `session.logs` with new `ParsedLog` objects, so the WeakMap keys no longer match and expansion state is reset.
 
@@ -80,16 +83,16 @@ This applies only to rebuilds that keep the same `ParsedLog` objects. Field-alia
 sequenceDiagram
   participant User
   participant DOM
-  participant WeakMap as expandedJsonPathsByLog
+  participant WeakMap as jsonPathStateByLog
 
   User->>DOM: expand node at path P
-  DOM->>WeakMap: add P to Set for this log
+  DOM->>WeakMap: set P to true for this log
 
   Note over DOM: e.g. display setting change triggers rerenderAllLogs
 
   DOM->>DOM: destroy and recreate log DOM
-  DOM->>WeakMap: read Set for same log object
-  WeakMap-->>DOM: P still present
+  DOM->>WeakMap: read Map for same log object
+  WeakMap-->>DOM: P is true
   DOM->>DOM: buildLazyValueRoot calls expand for P
 ```
 
@@ -97,14 +100,14 @@ sequenceDiagram
 
 These are **orthogonal**:
 
-1. **`attachContextMenuHandler(element, field, value, fileInfo)`** registers `contextmenu` → `showContextMenu`, which sets **`contextMenuTarget`** and positions the menu. It does **not** read or write `expandedJsonPathsByLog`.
+1. **`attachContextMenuHandler(element, field, value, fileInfo)`** registers `contextmenu` → `showContextMenu`, which sets **`contextMenuTarget`** and positions the menu. It does **not** read or write `jsonPathStateByLog`.
 
 2. **Choosing Include/Exclude/Copy** in the menu uses `contextMenuTarget` and then **`hideContextMenu`**`. That only clears the menu target; it does **not** collapse lazy JSON nodes.
 
 ```mermaid
 flowchart LR
   subgraph lazy [Lazy JSON state]
-    WM[WeakMap path Set]
+    WM[WeakMap path Map]
     DOM[DOM children under node]
   end
 
@@ -124,7 +127,7 @@ flowchart LR
 
 ### When expansion state is lost
 
-- **Different log object** (new parse, new array slot in `session.logs`): new WeakMap entry—no remembered paths.
+- **Different log object** (new parse, new array slot in `session.logs`): new WeakMap entry—no remembered paths, so every node uses the `collapseJSON` default.
 - **Field-alias settings changed**: `replaceSessionLogs` re-parses logs into new `ParsedLog` objects, so previous WeakMap entries do not apply.
 - **Log removed from session / cleared**: reference gone; WeakMap entry is eligible for GC.
-- **Collapse**: only that path is removed from the `Set`; children disappear from DOM; **nested paths may remain** in the `Set` until explicitly collapsed or the log is GC’d.
+- **Collapse**: only that path is set to `false`; children disappear from DOM; **nested paths keep their entries** until toggled again or the log is GC’d.

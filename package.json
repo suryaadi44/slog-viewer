@@ -192,7 +192,7 @@
           "type": "boolean",
           "default": true,
           "order": 4,
-          "description": "Show JSON collapsed by default (click to expand)"
+          "description": "Show log details and nested JSON objects/arrays collapsed by default (click to expand). When disabled, nested fields are expanded too."
         },
         "slogViewer.showRawJSON": {
           "type": "boolean",
