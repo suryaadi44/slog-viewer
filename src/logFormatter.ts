@@ -53,7 +53,8 @@ export function getFieldAliases(config: vscode.WorkspaceConfiguration): FieldAli
 /**
  * Pick the first present field value from a list of candidate key names.
  * Matching is case-insensitive and based on key existence (not truthiness),
- * so falsy values like 0 or "" are still selected.
+ * so falsy values like 0 are still selected. Blank strings are skipped so a
+ * placeholder such as `"message":""` falls through to later candidates.
  */
 function pickField(
   lowerKeyMap: Map<string, any>,
@@ -61,9 +62,14 @@ function pickField(
 ): any {
   for (const candidate of candidates) {
     const lower = candidate.toLowerCase();
-    if (lowerKeyMap.has(lower)) {
-      return lowerKeyMap.get(lower);
+    if (!lowerKeyMap.has(lower)) {
+      continue;
     }
+    const value = lowerKeyMap.get(lower);
+    if (typeof value === 'string' && value.trim() === '') {
+      continue;
+    }
+    return value;
   }
   return undefined;
 }

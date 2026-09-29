@@ -206,6 +206,19 @@ describe('logFormatter', () => {
       expect(result?.timestamp).toBe('t1');
     });
 
+    it('should fall through to an alias when the built-in field is an empty string', () => {
+      const input = '{"time":"t1","level":"info","message":"","_message_1":"http://example.com"}';
+      const result = parseJSONLog(input, { time: [], level: [], message: ['_message_1'] });
+      expect(result?.message).toBe('http://example.com');
+      expect(result?.otherFields.message).toBe('');
+    });
+
+    it('should still select non-string falsy values like 0', () => {
+      const input = '{"time":"t1","level":"info","msg":0,"desc":"hello"}';
+      const result = parseJSONLog(input, pythonAliases);
+      expect(result?.message).toBe(0);
+    });
+
     it('should match field names case-insensitively', () => {
       const input = '{"AscTime":"2026-04-17","LevelName":"warn","Desc":"hi"}';
       const result = parseJSONLog(input, pythonAliases);
